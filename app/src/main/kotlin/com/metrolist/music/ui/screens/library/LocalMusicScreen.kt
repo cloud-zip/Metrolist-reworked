@@ -14,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.asPaddingValues
@@ -71,8 +72,10 @@ import com.metrolist.music.constants.ArtistSortDescendingKey
 import com.metrolist.music.constants.ArtistSortType
 import com.metrolist.music.constants.ArtistSortTypeKey
 import com.metrolist.music.constants.ArtistViewTypeKey
+import com.metrolist.music.constants.CONTENT_TYPE_ALBUM
 import com.metrolist.music.constants.CONTENT_TYPE_ARTIST
 import com.metrolist.music.constants.CONTENT_TYPE_HEADER
+import com.metrolist.music.constants.CONTENT_TYPE_SONG
 import com.metrolist.music.constants.GridItemSize
 import com.metrolist.music.constants.GridItemsSizeKey
 import com.metrolist.music.constants.GridThumbnailHeight
@@ -91,6 +94,7 @@ import com.metrolist.music.ui.component.SongListItem
 import com.metrolist.music.ui.component.SortHeader
 import com.metrolist.music.ui.component.AlbumListItem
 import com.metrolist.music.ui.component.AlbumGridItem
+import com.metrolist.music.ui.menu.AlbumMenu
 import com.metrolist.music.ui.menu.SongMenu
 import com.metrolist.music.utils.LocalMusicRepository
 import com.metrolist.music.utils.LocalSyncStatus
@@ -108,6 +112,7 @@ fun LocalMusicScreen(
     viewModel: LocalMusicViewModel = hiltViewModel(),
 ) {
     val menuState = LocalMenuState.current
+    val playerConnection = LocalPlayerConnection.current
     val haptic = LocalHapticFeedback.current
     val coroutineScope = rememberCoroutineScope()
     val database = LocalDatabase.current
@@ -124,19 +129,14 @@ fun LocalMusicScreen(
     val syncStatus by viewModel.syncStatus.collectAsState()
     val syncProgress by viewModel.syncProgress.collectAsState()
     val localArtists by viewModel.localArtists.collectAsState()
+    val allLocalAlbums by viewModel.allLocalAlbums.collectAsState()
+    val allLocalSongs by viewModel.allLocalSongs.collectAsState()
 
     Timber.d("LocalMusicScreen: COMPOSE - hasPermission=$hasPermission, syncStatus=$syncStatus, syncProgress=$syncProgress, artistCount=${localArtists.size}")
 
     var searchQuery by remember { mutableStateOf(TextFieldValue("")) }
     var isSearching by remember { mutableStateOf(false) }
     val searchFocusRequester = remember { FocusRequester() }
-
-    // Auto-focus search field when search is opened
-    LaunchedEffect(isSearching) {
-        if (isSearching) {
-            searchFocusRequester.requestFocus()
-        }
-    }
     var showPermissionDialog by remember { mutableStateOf(false) }
 
     val filteredArtists = remember(localArtists, searchQuery.text, sortType, sortDescending) {
@@ -151,6 +151,30 @@ fun LocalMusicScreen(
                     else -> artists
                 }.let { if (sortDescending) it.reversed() else it }
             }
+    }
+
+    val filteredAlbums = remember(allLocalAlbums, searchQuery.text) {
+        if (searchQuery.text.isEmpty()) emptyList()
+        else allLocalAlbums.filter { album ->
+            album.album.title.contains(searchQuery.text, ignoreCase = true)
+        }
+    }
+
+    val filteredSongs = remember(allLocalSongs, searchQuery.text) {
+        if (searchQuery.text.isEmpty()) emptyList()
+        else allLocalSongs.filter { song ->
+            song.song.title.contains(searchQuery.text, ignoreCase = true) ||
+            song.song.albumName?.contains(searchQuery.text, ignoreCase = true) == true
+        }
+    }
+
+    val isActiveSearch = isSearching && searchQuery.text.isNotEmpty()
+
+    // Auto-focus search field when search is opened
+    LaunchedEffect(isSearching) {
+        if (isSearching) {
+            searchFocusRequester.requestFocus()
+        }
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -228,35 +252,6 @@ fun LocalMusicScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp),
-                )
-            }
-
-            if (isSearching) {
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    placeholder = { Text(stringResource(R.string.search)) },
-                    leadingIcon = {
-                        Icon(
-                            painter = painterResource(R.drawable.search),
-                            contentDescription = null
-                        )
-                    },
-                    trailingIcon = {
-                        if (searchQuery.text.isNotEmpty()) {
-                            IconButton(onClick = { searchQuery = TextFieldValue("") }) {
-                                Icon(
-                                    painter = painterResource(R.drawable.close),
-                                    contentDescription = null
-                                )
-                            }
-                        }
-                    },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                        .focusRequester(searchFocusRequester)
                 )
             }
 
@@ -350,55 +345,230 @@ fun LocalMusicScreen(
                 Spacer(modifier = Modifier.weight(1f))
             }
         } else {
-            PullToRefreshBox(
-                isRefreshing = syncStatus is LocalSyncStatus.Syncing,
-                onRefresh = {
-                    Timber.d("LocalMusicScreen: Pull-to-refresh triggered")
-                    coroutineScope.launch {
-                        viewModel.syncLocalMusic()
-                    }
-                },
+            val windowInsets = LocalPlayerAwareWindowInsets.current
+            val bottomPadding = windowInsets.asPaddingValues().calculateBottomPadding()
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = windowInsets.asPaddingValues().calculateTopPadding())
             ) {
-                when (viewType) {
+                // Search TextField outside lazy content to prevent recreation on view type change
+                if (isSearching) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        placeholder = { Text(stringResource(R.string.search)) },
+                        leadingIcon = {
+                            Icon(
+                                painter = painterResource(R.drawable.search),
+                                contentDescription = null
+                            )
+                        },
+                        trailingIcon = {
+                            if (searchQuery.text.isNotEmpty()) {
+                                IconButton(onClick = { searchQuery = TextFieldValue("") }) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.close),
+                                        contentDescription = null
+                                    )
+                                }
+                            }
+                        },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .focusRequester(searchFocusRequester)
+                    )
+                }
+
+                PullToRefreshBox(
+                    isRefreshing = syncStatus is LocalSyncStatus.Syncing,
+                    onRefresh = {
+                        Timber.d("LocalMusicScreen: Pull-to-refresh triggered")
+                        coroutineScope.launch {
+                            viewModel.syncLocalMusic()
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    // Force list view when actively searching to show albums and songs
+                    val effectiveViewType = if (isActiveSearch) LibraryViewType.LIST else viewType
+                when (effectiveViewType) {
                     LibraryViewType.LIST ->
                         LazyColumn(
                             state = lazyListState,
-                            contentPadding = LocalPlayerAwareWindowInsets.current.asPaddingValues(),
+                            contentPadding = PaddingValues(bottom = bottomPadding),
                         ) {
                             item(key = "header", contentType = CONTENT_TYPE_HEADER) {
                                 headerContent()
                             }
 
-                            if (filteredArtists.isEmpty() && syncStatus !is LocalSyncStatus.Syncing) {
-                                item(key = "empty_placeholder") {
-                                    EmptyPlaceholder(
-                                        icon = R.drawable.artist,
-                                        text = stringResource(R.string.no_local_artists),
+                            if (isActiveSearch) {
+                                // Search results mode
+                                if (filteredArtists.isEmpty() && filteredAlbums.isEmpty() && filteredSongs.isEmpty()) {
+                                    item(key = "no_results") {
+                                        EmptyPlaceholder(
+                                            icon = R.drawable.search,
+                                            text = stringResource(R.string.no_results_found),
+                                        )
+                                    }
+                                }
+
+                                if (filteredArtists.isNotEmpty()) {
+                                    item(key = "artists_header") {
+                                        Text(
+                                            text = stringResource(R.string.artists),
+                                            style = MaterialTheme.typography.titleMedium,
+                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                                        )
+                                    }
+                                    items(
+                                        items = filteredArtists,
+                                        key = { "artist_${it.id}" },
+                                        contentType = { CONTENT_TYPE_ARTIST },
+                                    ) { artist ->
+                                        ArtistListItem(
+                                            artist = artist,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    navController.navigate("local_artist/${artist.id}")
+                                                }
+                                                .animateItem()
+                                        )
+                                    }
+                                }
+
+                                if (filteredAlbums.isNotEmpty()) {
+                                    item(key = "albums_header") {
+                                        Text(
+                                            text = stringResource(R.string.albums),
+                                            style = MaterialTheme.typography.titleMedium,
+                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                                        )
+                                    }
+                                    items(
+                                        items = filteredAlbums,
+                                        key = { "album_${it.id}" },
+                                        contentType = { CONTENT_TYPE_ALBUM },
+                                    ) { album ->
+                                        AlbumListItem(
+                                            album = album,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .combinedClickable(
+                                                    onClick = {
+                                                        navController.navigate("local_album/${album.id}")
+                                                    },
+                                                    onLongClick = {
+                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                        menuState.show {
+                                                            AlbumMenu(
+                                                                originalAlbum = album,
+                                                                navController = navController,
+                                                                onDismiss = menuState::dismiss
+                                                            )
+                                                        }
+                                                    }
+                                                )
+                                                .animateItem()
+                                        )
+                                    }
+                                }
+
+                                if (filteredSongs.isNotEmpty()) {
+                                    item(key = "songs_header") {
+                                        Text(
+                                            text = stringResource(R.string.songs),
+                                            style = MaterialTheme.typography.titleMedium,
+                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                                        )
+                                    }
+                                    items(
+                                        items = filteredSongs,
+                                        key = { "song_${it.id}" },
+                                        contentType = { CONTENT_TYPE_SONG },
+                                    ) { song ->
+                                        SongListItem(
+                                            song = song,
+                                            trailingContent = {
+                                                IconButton(
+                                                    onClick = {
+                                                        menuState.show {
+                                                            SongMenu(
+                                                                originalSong = song,
+                                                                navController = navController,
+                                                                onDismiss = menuState::dismiss
+                                                            )
+                                                        }
+                                                    }
+                                                ) {
+                                                    Icon(
+                                                        painter = painterResource(R.drawable.more_vert),
+                                                        contentDescription = null
+                                                    )
+                                                }
+                                            },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .combinedClickable(
+                                                    onClick = {
+                                                        playerConnection?.playQueue(
+                                                            ListQueue(
+                                                                title = song.song.title,
+                                                                items = listOf(song.toMediaItem())
+                                                            )
+                                                        )
+                                                    },
+                                                    onLongClick = {
+                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                        menuState.show {
+                                                            SongMenu(
+                                                                originalSong = song,
+                                                                navController = navController,
+                                                                onDismiss = menuState::dismiss
+                                                            )
+                                                        }
+                                                    }
+                                                )
+                                                .animateItem()
+                                        )
+                                    }
+                                }
+                            } else {
+                                // Normal artist list mode
+                                if (filteredArtists.isEmpty() && syncStatus !is LocalSyncStatus.Syncing) {
+                                    item(key = "empty_placeholder") {
+                                        EmptyPlaceholder(
+                                            icon = R.drawable.artist,
+                                            text = stringResource(R.string.no_local_artists),
+                                        )
+                                    }
+                                }
+
+                                items(
+                                    items = filteredArtists,
+                                    key = { it.id },
+                                    contentType = { CONTENT_TYPE_ARTIST },
+                                ) { artist ->
+                                    ArtistListItem(
+                                        artist = artist,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .combinedClickable(
+                                                onClick = {
+                                                    Timber.d("LocalMusicScreen: Artist clicked - id=${artist.id}, name=${artist.artist.name}")
+                                                    navController.navigate("local_artist/${artist.id}")
+                                                },
+                                                onLongClick = {
+                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    Timber.d("LocalMusicScreen: Artist long-pressed - id=${artist.id}")
+                                                },
+                                            )
+                                            .animateItem()
                                     )
                                 }
-                            }
-
-                            items(
-                                items = filteredArtists,
-                                key = { it.id },
-                                contentType = { CONTENT_TYPE_ARTIST },
-                            ) { artist ->
-                                ArtistListItem(
-                                    artist = artist,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .combinedClickable(
-                                            onClick = {
-                                                Timber.d("LocalMusicScreen: Artist clicked - id=${artist.id}, name=${artist.artist.name}")
-                                                navController.navigate("local_artist/${artist.id}")
-                                            },
-                                            onLongClick = {
-                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                Timber.d("LocalMusicScreen: Artist long-pressed - id=${artist.id}")
-                                            },
-                                        )
-                                        .animateItem()
-                                )
                             }
                         }
 
@@ -408,7 +578,7 @@ fun LocalMusicScreen(
                             columns = GridCells.Adaptive(
                                 minSize = GridThumbnailHeight + if (gridItemSize == GridItemSize.BIG) 24.dp else (-24).dp,
                             ),
-                            contentPadding = LocalPlayerAwareWindowInsets.current.asPaddingValues(),
+                            contentPadding = PaddingValues(bottom = bottomPadding),
                         ) {
                             item(
                                 key = "header",
@@ -452,6 +622,7 @@ fun LocalMusicScreen(
                             }
                         }
                 }
+            }
             }
         }
     }
