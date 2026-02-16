@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -29,12 +28,8 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -199,22 +194,6 @@ fun LocalMusicScreen(
         }
     }
 
-    val filterContent = @Composable {
-        Row {
-            Spacer(Modifier.width(12.dp))
-            FilterChip(
-                label = { Text(stringResource(R.string.filter_local)) },
-                selected = true,
-                colors = FilterChipDefaults.filterChipColors(containerColor = MaterialTheme.colorScheme.surface),
-                onClick = { navController.navigateUp() },
-                shape = RoundedCornerShape(16.dp),
-                leadingIcon = {
-                    Icon(painter = painterResource(R.drawable.close), contentDescription = "")
-                },
-            )
-        }
-    }
-
     val lazyListState = rememberLazyListState()
     val lazyGridState = rememberLazyGridState()
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -334,12 +313,7 @@ fun LocalMusicScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (!hasPermission) {
-            // Just show filter chip, dialog handles permission request
-            Column(
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                filterContent()
-            }
+            // Permission dialog handles permission request
         } else if (isInitialSync) {
             // Full-screen loading for initial sync
             Column(
@@ -348,7 +322,6 @@ fun LocalMusicScreen(
                     .padding(32.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                filterContent()
                 Spacer(modifier = Modifier.weight(1f))
                 CircularProgressIndicator()
                 Spacer(modifier = Modifier.padding(16.dp))
@@ -381,10 +354,6 @@ fun LocalMusicScreen(
                             state = lazyListState,
                             contentPadding = LocalPlayerAwareWindowInsets.current.asPaddingValues(),
                         ) {
-                            item(key = "filter", contentType = CONTENT_TYPE_HEADER) {
-                                filterContent()
-                            }
-
                             item(key = "header", contentType = CONTENT_TYPE_HEADER) {
                                 headerContent()
                             }
@@ -430,14 +399,6 @@ fun LocalMusicScreen(
                             ),
                             contentPadding = LocalPlayerAwareWindowInsets.current.asPaddingValues(),
                         ) {
-                            item(
-                                key = "filter",
-                                span = { GridItemSpan(maxLineSpan) },
-                                contentType = CONTENT_TYPE_HEADER,
-                            ) {
-                                filterContent()
-                            }
-
                             item(
                                 key = "header",
                                 span = { GridItemSpan(maxLineSpan) },
