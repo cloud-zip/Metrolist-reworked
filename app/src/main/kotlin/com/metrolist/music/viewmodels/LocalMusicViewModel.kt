@@ -99,6 +99,9 @@ class LocalArtistViewModel @Inject constructor(
         Timber.d("LocalArtistViewModel: INIT - artistId=$artistId")
     }
 
+    private val _isLoading = MutableStateFlow(true)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
     val artist = database.artist(artistId)
         .stateIn(viewModelScope, SharingStarted.Lazily, null)
 
@@ -107,6 +110,16 @@ class LocalArtistViewModel @Inject constructor(
 
     val songs = database.localSongsByArtist(artistId)
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    init {
+        viewModelScope.launch {
+            // Wait for first emission from songs flow to mark loading complete
+            songs.collect {
+                _isLoading.value = false
+                return@collect
+            }
+        }
+    }
 }
 
 @HiltViewModel

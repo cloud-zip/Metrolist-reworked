@@ -94,6 +94,7 @@ fun LocalArtistScreen(
     val artist by viewModel.artist.collectAsState()
     val albums by viewModel.albums.collectAsState()
     val songs by viewModel.songs.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
 
     Timber.d("LocalArtistScreen: COMPOSE - artist=${artist?.artist?.name}, albumCount=${albums.size}, songCount=${songs.size}")
 
@@ -139,15 +140,17 @@ fun LocalArtistScreen(
                                     style = MaterialTheme.typography.headlineSmall,
                                     modifier = Modifier.padding(top = 16.dp)
                                 )
-                                Text(
-                                    text = pluralStringResource(
-                                        R.plurals.n_song,
-                                        songs.size,
-                                        songs.size
-                                    ),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.secondary
-                                )
+                                if (!isLoading) {
+                                    Text(
+                                        text = pluralStringResource(
+                                            R.plurals.n_song,
+                                            songs.size,
+                                            songs.size
+                                        ),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.secondary
+                                    )
+                                }
                             }
 
                             Row(
@@ -364,15 +367,17 @@ fun LocalArtistScreen(
                                     style = MaterialTheme.typography.headlineSmall,
                                     modifier = Modifier.padding(top = 16.dp)
                                 )
-                                Text(
-                                    text = pluralStringResource(
-                                        R.plurals.n_song,
-                                        songs.size,
-                                        songs.size
-                                    ),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.secondary
-                                )
+                                if (!isLoading) {
+                                    Text(
+                                        text = pluralStringResource(
+                                            R.plurals.n_song,
+                                            songs.size,
+                                            songs.size
+                                        ),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.secondary
+                                    )
+                                }
                             }
 
                             Row(
