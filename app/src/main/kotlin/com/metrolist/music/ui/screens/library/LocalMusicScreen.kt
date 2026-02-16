@@ -50,6 +50,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -127,6 +129,14 @@ fun LocalMusicScreen(
 
     var searchQuery by remember { mutableStateOf(TextFieldValue("")) }
     var isSearching by remember { mutableStateOf(false) }
+    val searchFocusRequester = remember { FocusRequester() }
+
+    // Auto-focus search field when search is opened
+    LaunchedEffect(isSearching) {
+        if (isSearching) {
+            searchFocusRequester.requestFocus()
+        }
+    }
     var showPermissionDialog by remember { mutableStateOf(false) }
 
     val filteredArtists = remember(localArtists, searchQuery.text, sortType, sortDescending) {
@@ -246,6 +256,7 @@ fun LocalMusicScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .focusRequester(searchFocusRequester)
                 )
             }
 
