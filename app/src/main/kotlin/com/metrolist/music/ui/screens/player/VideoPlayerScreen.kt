@@ -172,6 +172,7 @@ fun VideoPlayerScreen(
     var adaptiveData by remember { mutableStateOf<YTPlayerUtils.AdaptiveVideoData?>(null) }
     var adaptiveQualities by remember { mutableStateOf<List<YTPlayerUtils.VideoQualityInfo>>(emptyList()) }
     var selectedQualityHeight by rememberSaveable { mutableStateOf(1080) } // Default to 1080p
+    var savedPositionForQualityChange by rememberSaveable { mutableStateOf(0L) } // Save position before quality switch
     var playbackInfo by rememberSaveable { mutableStateOf<String?>(null) }
     var isInPipMode by remember { mutableStateOf(activity?.isInPictureInPictureMode == true) }
     var artistName by rememberSaveable(videoId, artist) { mutableStateOf(artist?.takeIf { it.isNotBlank() }) }
@@ -362,10 +363,16 @@ fun VideoPlayerScreen(
         onDispose { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
     }
 
-    LaunchedEffect(videoId, maxVideoBitrateKbps, reloadKey, localUri) {
-        isLoading = true
-        loadError = null
-        videoItem = null
+    // Track if this is a quality change (to preserve position) vs initial load
+    var isQualityChange by remember { mutableStateOf(false) }
+
+    LaunchedEffect(videoId, maxVideoBitrateKbps, reloadKey, localUri, selectedQualityHeight) {
+        // Don't show loading spinner for quality changes - player handles transition smoothly
+        if (!isQualityChange) {
+            isLoading = true
+            loadError = null
+            videoItem = null
+        }
         adaptiveData = null
 
         // If we have a local URI (downloaded video), play it directly
@@ -432,6 +439,7 @@ fun VideoPlayerScreen(
                     drmConfiguration = null
                 )
                 isLoading = false
+                isQualityChange = false
                 return@LaunchedEffect
             }
         }
@@ -453,6 +461,7 @@ fun VideoPlayerScreen(
             if (validatedUrl == null) {
                 loadError = "Invalid stream URL"
                 isLoading = false
+                isQualityChange = false
                 return@onSuccess
             }
 
@@ -486,9 +495,11 @@ fun VideoPlayerScreen(
                 drmConfiguration = null
             )
             isLoading = false
+            isQualityChange = false
         }.onFailure {
             loadError = it.localizedMessage ?: "Playback error"
             isLoading = false
+            isQualityChange = false
         }
     }
 
@@ -690,8 +701,13 @@ fun VideoPlayerScreen(
 
                                 // Update media source when URLs change (quality switch)
                                 LaunchedEffect(adaptive.videoUrl, adaptive.audioUrl) {
-                                    val currentPos = adaptivePlayer.currentPosition
-                                    val wasPlaying = adaptivePlayer.isPlaying
+                                    // Use saved position for quality changes, otherwise use player's current position
+                                    val restorePosition = if (savedPositionForQualityChange > 0) {
+                                        savedPositionForQualityChange
+                                    } else {
+                                        adaptivePlayer.currentPosition
+                                    }
+                                    val wasPlaying = adaptivePlayer.isPlaying || savedPositionForQualityChange > 0
 
                                     val videoSource = ProgressiveMediaSource.Factory(dataSourceFactory)
                                         .createMediaSource(MediaItem.fromUri(adaptive.videoUrl))
@@ -704,12 +720,15 @@ fun VideoPlayerScreen(
                                     adaptivePlayer.prepare()
 
                                     // Restore position on quality changes (not initial load)
-                                    if (currentPos > 0) {
-                                        adaptivePlayer.seekTo(currentPos)
+                                    if (restorePosition > 0) {
+                                        adaptivePlayer.seekTo(restorePosition)
                                     }
-                                    adaptivePlayer.playWhenReady = wasPlaying || currentPos == 0L
+                                    adaptivePlayer.playWhenReady = wasPlaying
 
-                                    Timber.tag("VideoPlayer").d("Updated media source: video=${adaptive.videoFormat.height}p, restored pos=${currentPos}ms")
+                                    // Clear saved position after restoring
+                                    savedPositionForQualityChange = 0L
+
+                                    Timber.tag("VideoPlayer").d("Updated media source: video=${adaptive.videoFormat.height}p, restored pos=${restorePosition}ms")
                                 }
 
                                 // Set playerInstance for controls
@@ -1263,7 +1282,12 @@ fun VideoPlayerScreen(
                     adaptiveQualities.forEach { quality ->
                         Surface(
                             onClick = {
-                                selectedQualityHeight = quality.height
+                                if (quality.height != selectedQualityHeight) {
+                                    // Save current position before quality change
+                                    savedPositionForQualityChange = playerInstance?.currentPosition ?: positionMs
+                                    isQualityChange = true
+                                    selectedQualityHeight = quality.height
+                                }
                                 showQualityDialog = false
                             },
                             shape = RoundedCornerShape(12.dp),
