@@ -326,6 +326,8 @@ fun SongMenu(
     val isPortrait = configuration.orientation == Configuration.ORIENTATION_PORTRAIT
 
     val isGuest = listenTogetherManager?.isInRoom == true && !listenTogetherManager.isHost
+    // Block queue modifications for local songs when in Listen Together (local files can't be synced)
+    val isLocalInListenTogether = listenTogetherManager?.isInRoom == true && song.song.isLocal
 
     LazyColumn(
         contentPadding = PaddingValues(
@@ -430,7 +432,7 @@ fun SongMenu(
                             }
                         )
                     } else null,
-                    if (!isGuest) {
+                    if (!isGuest && !isLocalInListenTogether) {
                         Material3MenuItemData(
                             title = { Text(text = stringResource(R.string.play_next)) },
                             description = { Text(text = stringResource(R.string.play_next_desc)) },
@@ -446,7 +448,7 @@ fun SongMenu(
                             }
                         )
                     } else null,
-                    if (!isGuest) {
+                    if (!isGuest && !isLocalInListenTogether) {
                         Material3MenuItemData(
                             title = { Text(text = stringResource(R.string.add_to_queue)) },
                             description = { Text(text = stringResource(R.string.add_to_queue_desc)) },

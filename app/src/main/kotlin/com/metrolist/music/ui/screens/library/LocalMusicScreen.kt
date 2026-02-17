@@ -64,7 +64,9 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import androidx.navigation.compose.currentBackStackEntryAsState
+import android.widget.Toast
 import com.metrolist.music.LocalDatabase
+import com.metrolist.music.LocalListenTogetherManager
 import com.metrolist.music.LocalPlayerAwareWindowInsets
 import com.metrolist.music.LocalPlayerConnection
 import com.metrolist.music.R
@@ -113,6 +115,8 @@ fun LocalMusicScreen(
 ) {
     val menuState = LocalMenuState.current
     val playerConnection = LocalPlayerConnection.current
+    val listenTogetherManager = LocalListenTogetherManager.current
+    val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
     val coroutineScope = rememberCoroutineScope()
     val database = LocalDatabase.current
@@ -514,6 +518,10 @@ fun LocalMusicScreen(
                                                 .fillMaxWidth()
                                                 .combinedClickable(
                                                     onClick = {
+                                                        if (listenTogetherManager?.isInRoom == true) {
+                                                            Toast.makeText(context, R.string.local_playback_blocked_listen_together, Toast.LENGTH_SHORT).show()
+                                                            return@combinedClickable
+                                                        }
                                                         playerConnection?.playQueue(
                                                             ListQueue(
                                                                 title = song.song.title,

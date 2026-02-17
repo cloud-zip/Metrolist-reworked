@@ -522,41 +522,43 @@ fun PlayerMenu(
 
         item { Spacer(modifier = Modifier.height(12.dp)) }
 
-        item {
-            Material3MenuGroup(
-                items = buildList {
-                    add(
-                        Material3MenuItemData(
-                            title = { Text(text = stringResource(R.string.listen_together)) },
-                            icon = {
-                                // Show a small badge when there are pending suggestions
-                                Box {
-                                    Icon(
-                                        painter = painterResource(R.drawable.group),
-                                        contentDescription = null,
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                    if (pendingSuggestions.isNotEmpty()) {
-                                        Surface(
-                                            shape = RoundedCornerShape(12.dp),
-                                            color = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier
-                                                .offset(x = 8.dp, y = (-6).dp)
-                                                .align(Alignment.TopEnd)
-                                        ) {
-                                            Text(
-                                                text = pendingSuggestions.size.toString(),
-                                                color = MaterialTheme.colorScheme.onPrimary,
-                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                                style = MaterialTheme.typography.labelSmall
-                                            )
+        // Only show Listen Together section if current song is not local
+        if (librarySong?.song?.isLocal != true) {
+            item {
+                Material3MenuGroup(
+                    items = buildList {
+                        add(
+                            Material3MenuItemData(
+                                title = { Text(text = stringResource(R.string.listen_together)) },
+                                icon = {
+                                    // Show a small badge when there are pending suggestions
+                                    Box {
+                                        Icon(
+                                            painter = painterResource(R.drawable.group),
+                                            contentDescription = null,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                        if (pendingSuggestions.isNotEmpty()) {
+                                            Surface(
+                                                shape = RoundedCornerShape(12.dp),
+                                                color = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier
+                                                    .offset(x = 8.dp, y = (-6).dp)
+                                                    .align(Alignment.TopEnd)
+                                            ) {
+                                                Text(
+                                                    text = pendingSuggestions.size.toString(),
+                                                    color = MaterialTheme.colorScheme.onPrimary,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                    style = MaterialTheme.typography.labelSmall
+                                                )
+                                            }
                                         }
                                     }
-                                }
-                            },
-                            onClick = { showListenTogetherDialog = true }
+                                },
+                                onClick = { showListenTogetherDialog = true }
+                            )
                         )
-                    )
                     if (isListenTogetherGuest) {
                         add(
                             Material3MenuItemData(
@@ -578,6 +580,7 @@ fun PlayerMenu(
                 }
             )
         }
+        } // End of isLocal check for Listen Together
 
         item { Spacer(modifier = Modifier.height(12.dp)) }
 

@@ -35,6 +35,7 @@ import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,6 +49,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import coil3.compose.AsyncImage
+import android.widget.Toast
+import com.metrolist.music.LocalListenTogetherManager
 import com.metrolist.music.LocalPlayerAwareWindowInsets
 import com.metrolist.music.LocalPlayerConnection
 import com.metrolist.music.R
@@ -73,6 +76,8 @@ fun LocalAlbumScreen(
 ) {
     val menuState = LocalMenuState.current
     val playerConnection = LocalPlayerConnection.current ?: return
+    val listenTogetherManager = LocalListenTogetherManager.current
+    val context = LocalContext.current
 
     val album by viewModel.album.collectAsState()
     val songs by viewModel.songs.collectAsState()
@@ -154,6 +159,10 @@ fun LocalAlbumScreen(
                     ) {
                         Button(
                             onClick = {
+                                if (listenTogetherManager?.isInRoom == true) {
+                                    Toast.makeText(context, R.string.local_playback_blocked_listen_together, Toast.LENGTH_SHORT).show()
+                                    return@Button
+                                }
                                 Timber.d("LocalAlbumScreen: Play button clicked - ${songs.size} songs")
                                 if (songs.isNotEmpty()) {
                                     val mediaItems = songs.map { it.toMediaItem() }
@@ -182,6 +191,10 @@ fun LocalAlbumScreen(
 
                         OutlinedButton(
                             onClick = {
+                                if (listenTogetherManager?.isInRoom == true) {
+                                    Toast.makeText(context, R.string.local_playback_blocked_listen_together, Toast.LENGTH_SHORT).show()
+                                    return@OutlinedButton
+                                }
                                 Timber.d("LocalAlbumScreen: Shuffle button clicked - ${songs.size} songs")
                                 if (songs.isNotEmpty()) {
                                     playerConnection.playQueue(
@@ -246,6 +259,10 @@ fun LocalAlbumScreen(
                         .fillMaxWidth()
                         .combinedClickable(
                             onClick = {
+                                if (listenTogetherManager?.isInRoom == true) {
+                                    Toast.makeText(context, R.string.local_playback_blocked_listen_together, Toast.LENGTH_SHORT).show()
+                                    return@combinedClickable
+                                }
                                 Timber.d("LocalAlbumScreen: Song clicked - index=$index, id=${song.id}, title=${song.song.title}")
                                 val mediaItem = song.toMediaItem()
                                 Timber.d("LocalAlbumScreen: Song MediaItem uri=${mediaItem.localConfiguration?.uri}")

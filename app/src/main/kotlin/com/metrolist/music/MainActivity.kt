@@ -704,6 +704,16 @@ class MainActivity : ComponentActivity() {
                                 playerBottomSheetState.collapseSoft()
                             }
                         }
+
+                        override fun onTimelineChanged(
+                            timeline: androidx.media3.common.Timeline,
+                            reason: Int,
+                        ) {
+                            // Dismiss mini player when timeline is cleared (e.g., Listen Together blocking local content)
+                            if (timeline.isEmpty && !playerBottomSheetState.isDismissed) {
+                                playerBottomSheetState.dismiss()
+                            }
+                        }
                     }
                     player.addListener(listener)
                     onDispose {

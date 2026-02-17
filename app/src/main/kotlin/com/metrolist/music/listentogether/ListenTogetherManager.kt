@@ -6,6 +6,8 @@
 package com.metrolist.music.listentogether
 
 import android.content.Context
+import android.widget.Toast
+import com.metrolist.music.R
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import com.metrolist.innertube.YouTube
@@ -407,23 +409,66 @@ class ListenTogetherManager @Inject constructor(
                             Timber.tag(TAG).e(e, "Failed to add player listener on room create")
                         }
                     }
-                    // Initialize sync state
-                    lastSyncedIsPlaying = player?.playWhenReady
-                    lastSyncedTrackId = player?.currentMediaItem?.mediaId
 
-                    // If there's already a track loaded, send it to the server
-                    player?.currentMetadata?.let { metadata ->
-                        Timber.tag(TAG).d("Room created with existing track: ${metadata.title}")
-                        // Send track change so server has the current track info
-                        sendTrackChangeInternal(metadata)
-                        // If host is already playing, immediately send PLAY with current position
-                        val isPlaying = player.playWhenReady
-                        if (isPlaying) {
-                            lastSyncedIsPlaying = true
-                            val position = player.currentPosition
-                            Timber.tag(TAG).d("Host already playing on room create, sending PLAY at $position")
-                            client.sendPlaybackAction(PlaybackActions.PLAY, position = position)
+                    // Filter out local tracks from queue (local files can't be synced)
+                    val itemCount = player?.mediaItemCount ?: 0
+                    val localIndices = mutableListOf<Int>()
+                    for (i in 0 until itemCount) {
+                        if (player?.getMediaItemAt(i)?.mediaId?.startsWith("LOCAL_") == true) {
+                            localIndices.add(i)
                         }
+                    }
+
+                    if (localIndices.isNotEmpty()) {
+                        Timber.tag(TAG).d("Room created with ${localIndices.size} local tracks, filtering them out")
+                        val currentIndex = player?.currentMediaItemIndex ?: 0
+                        val currentIsLocal = currentIndex in localIndices
+
+                        // Remove local items from end to start to avoid index shifting
+                        for (i in localIndices.reversed()) {
+                            player?.removeMediaItem(i)
+                        }
+
+                        // Show toast about removed local files
+                        scope.launch(Dispatchers.Main) {
+                            Toast.makeText(context, R.string.local_playback_blocked_listen_together, Toast.LENGTH_LONG).show()
+                        }
+
+                        // Check if queue is now empty
+                        if (player?.mediaItemCount == 0) {
+                            Timber.tag(TAG).d("Queue empty after filtering local tracks")
+                            player?.stop()
+                            lastSyncedIsPlaying = false
+                            lastSyncedTrackId = null
+                        } else if (currentIsLocal) {
+                            // Current track was local, seek to first available track
+                            Timber.tag(TAG).d("Current track was local, seeking to first non-local track")
+                            player?.seekTo(0, 0)
+                        }
+                    }
+
+                    // Initialize sync state if we have content
+                    if (player?.mediaItemCount ?: 0 > 0) {
+                        lastSyncedIsPlaying = player?.playWhenReady
+                        lastSyncedTrackId = player?.currentMediaItem?.mediaId
+
+                        // If there's already a track loaded, send it to the server
+                        player?.currentMetadata?.let { metadata ->
+                            Timber.tag(TAG).d("Room created with existing track: ${metadata.title}")
+                            // Send track change so server has the current track info
+                            sendTrackChangeInternal(metadata)
+                            // If host is already playing, immediately send PLAY with current position
+                            val isPlaying = player.playWhenReady
+                            if (isPlaying) {
+                                lastSyncedIsPlaying = true
+                                val position = player.currentPosition
+                                Timber.tag(TAG).d("Host already playing on room create, sending PLAY at $position")
+                                client.sendPlaybackAction(PlaybackActions.PLAY, position = position)
+                            }
+                        }
+                    } else {
+                        lastSyncedIsPlaying = false
+                        lastSyncedTrackId = null
                     }
                     startQueueSyncObservation()
                     startHeartbeat()
@@ -437,6 +482,22 @@ class ListenTogetherManager @Inject constructor(
                 Timber.tag(TAG).d("Join approved for room: ${event.roomCode}")
                 // Save current mute state before joining as guest so we can restore it on leave
                 saveMuteStateOnJoin()
+
+                // Stop any local content before syncing (local files can't be synced)
+                val connection = playerConnection
+                val player = connection?.player
+                val hasLocalContent = (0 until (player?.mediaItemCount ?: 0)).any { i ->
+                    player?.getMediaItemAt(i)?.mediaId?.startsWith("LOCAL_") == true
+                }
+                if (hasLocalContent) {
+                    Timber.tag(TAG).d("Joining room with local content in queue, stopping playback")
+                    player?.stop()
+                    player?.clearMediaItems()
+                    scope.launch(Dispatchers.Main) {
+                        Toast.makeText(context, R.string.local_playback_blocked_listen_together, Toast.LENGTH_LONG).show()
+                    }
+                }
+
                 // Apply the full initial state including queue
                 applyPlaybackState(
                     currentTrack = event.state.currentTrack,

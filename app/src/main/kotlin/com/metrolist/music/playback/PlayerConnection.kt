@@ -450,6 +450,10 @@ class PlayerConnection(
     ) {
         queueWindows.value = player.getQueueWindows()
         queueTitle.value = service.queueTitle
+        // Update mediaMetadata when timeline is cleared (e.g., Listen Together blocking local content)
+        if (timeline.isEmpty) {
+            mediaMetadata.value = null
+        }
         currentMediaItemIndex.value = player.currentMediaItemIndex
         currentWindowIndex.value = player.getCurrentQueueIndex()
         updateCanSkipPreviousAndNext()

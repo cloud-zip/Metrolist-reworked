@@ -234,6 +234,9 @@ class MusicService :
     @Inject
     lateinit var widgetManager: MetrolistWidgetManager
 
+    @Inject
+    lateinit var listenTogetherManager: com.metrolist.music.listentogether.ListenTogetherManager
+
     private lateinit var audioManager: AudioManager
     private var audioFocusRequest: AudioFocusRequest? = null
     private var lastAudioFocusState = AudioManager.AUDIOFOCUS_NONE
@@ -1248,18 +1251,49 @@ class MusicService :
         }
         // Reset original queue size when starting a new queue
         originalQueueSize = 0
-        if (queue.preloadItem != null) {
-            player.setMediaItem(queue.preloadItem!!.toMediaItem())
+        // Block local preload item during Listen Together
+        val preloadItem = queue.preloadItem
+        val preloadIsLocal = preloadItem?.id?.startsWith("LOCAL_") == true
+        if (preloadItem != null && !(listenTogetherManager.isInRoom && preloadIsLocal)) {
+            player.setMediaItem(preloadItem.toMediaItem())
             player.prepare()
             player.playWhenReady = playWhenReady
+        } else if (listenTogetherManager.isInRoom && preloadIsLocal) {
+            // Show toast for blocked local preload
+            scope.launch(Dispatchers.Main) {
+                Toast.makeText(this@MusicService, R.string.local_playback_blocked_listen_together, Toast.LENGTH_LONG).show()
+            }
         }
         scope.launch(SilentHandler) {
-            val initialStatus =
+            var initialStatus =
                 withContext(Dispatchers.IO) {
                     queue.getInitialStatus()
                         .filterExplicit(dataStore.get(HideExplicitKey, false))
                         .filterVideoSongs(dataStore.get(HideVideoSongsKey, false))
                 }
+
+            // Filter out local files when Listen Together is active
+            if (listenTogetherManager.isInRoom) {
+                val originalCount = initialStatus.items.size
+                val filteredItems = initialStatus.items.filter { !it.mediaId.startsWith("LOCAL_") }
+                if (filteredItems.size < originalCount) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MusicService, R.string.local_playback_blocked_listen_together, Toast.LENGTH_LONG).show()
+                    }
+                    if (filteredItems.isEmpty()) {
+                        return@launch
+                    }
+                    // Adjust media item index if needed
+                    val newIndex = if (initialStatus.mediaItemIndex >= filteredItems.size) 0 else {
+                        // Count how many items before original index were removed
+                        val removedBefore = initialStatus.items.take(initialStatus.mediaItemIndex)
+                            .count { it.mediaId.startsWith("LOCAL_") }
+                        (initialStatus.mediaItemIndex - removedBefore).coerceAtLeast(0)
+                    }
+                    initialStatus = initialStatus.copy(items = filteredItems, mediaItemIndex = newIndex)
+                }
+            }
+
             if (queue.preloadItem != null && player.playbackState == STATE_IDLE) return@launch
             if (initialStatus.title != null) {
                 queueTitle = initialStatus.title
@@ -2637,9 +2671,11 @@ class MusicService :
                 Timber.tag("CacheResolver").d("Database lookup for $mediaId: song=${song?.song?.title}, isLocal=${song?.song?.isLocal}, downloadUri=${song?.song?.downloadUri}")
 
                 // Use local/downloaded file directly if available
-                if (song?.song?.downloadUri != null && dataSpec.position == 0L) {
+                // For local files (isLocal=true), always use downloadUri regardless of position
+                // since local playback handles seeking internally
+                if (song?.song?.downloadUri != null && (song.song.isLocal || dataSpec.position == 0L)) {
                     val localUri = song.song.downloadUri.toUri()
-                    Timber.tag("CacheResolver").d("Using local file for $mediaId: $localUri (isLocal=${song.song.isLocal})")
+                    Timber.tag("CacheResolver").d("Using local file for $mediaId: $localUri (isLocal=${song.song.isLocal}, position=${dataSpec.position})")
                     scope.launch(Dispatchers.IO) { recoverSong(mediaId) }
                     return@Factory dataSpec.withUri(localUri)
                 }
