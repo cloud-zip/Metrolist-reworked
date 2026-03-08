@@ -29,7 +29,7 @@ dependencies {
     implementation(libs.ktor.serialization.json)
     implementation(libs.ktor.client.encoding)
     implementation(libs.brotli)
-    implementation(libs.newpipeextractor)
+    implementation(libs.metrolistextractor)
     implementation(libs.timber)
     testImplementation(libs.junit)
 
