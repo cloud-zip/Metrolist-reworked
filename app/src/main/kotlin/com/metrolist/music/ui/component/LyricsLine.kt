@@ -37,7 +37,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -79,11 +83,25 @@ private data class HyphenGroupWord(
     val groupEndMs: Long
 )
 
-private fun String.containsRtl(): Boolean {
+private fun String.requiresComplexRendering(): Boolean {
     for (c in this) {
         val directionality = Character.getDirectionality(c).toInt()
         if (directionality == Character.DIRECTIONALITY_RIGHT_TO_LEFT.toInt() ||
             directionality == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC.toInt()
+        ) {
+            return true
+        }
+        val block = Character.UnicodeBlock.of(c)
+        if (block == Character.UnicodeBlock.DEVANAGARI ||
+            block == Character.UnicodeBlock.BENGALI ||
+            block == Character.UnicodeBlock.TAMIL ||
+            block == Character.UnicodeBlock.TELUGU ||
+            block == Character.UnicodeBlock.MALAYALAM ||
+            block == Character.UnicodeBlock.KANNADA ||
+            block == Character.UnicodeBlock.GUJARATI ||
+            block == Character.UnicodeBlock.THAI ||
+            block == Character.UnicodeBlock.ARABIC ||
+            block == Character.UnicodeBlock.HEBREW
         ) {
             return true
         }
@@ -134,7 +152,7 @@ internal fun LyricsLine(
             start = when (lyricsTextPosition) { LyricsPosition.LEFT, LyricsPosition.RIGHT -> 11.dp; LyricsPosition.CENTER -> 24.dp },
             end = when (lyricsTextPosition) { LyricsPosition.LEFT, LyricsPosition.RIGHT -> 11.dp; LyricsPosition.CENTER -> 24.dp },
             top = if (item.isBackground) 0.dp else 12.dp,
-            bottom = if (item.isBackground) 2.dp else 12.dp // simplified gap logic
+            bottom = if (item.isBackground) 2.dp else 12.dp
         )
 
     val agentAlignment = when {
@@ -442,22 +460,19 @@ private fun WordLevelLyrics(
             )
         }
         
-        // letterLayouts removed: measuring each character in isolation breaks complex scripts
-        // (Devanagari, Bengali, Arabic, etc.) because combining marks lose their base-char context.
-        // We now draw characters by clipping the correctly-shaped full layoutResult instead.
-        
-        val isRtlText = remember(mainText) { mainText.containsRtl() }
+        val isComplexText = remember(mainText) { mainText.requiresComplexRendering() }
         
         Canvas(modifier = Modifier
             .fillMaxWidth()
             .height(with(density) { layoutResult.size.height.toDp() })
-            .graphicsLayer(clip = false)
+            // 🚀 THE MAGIC: Offscreen layer compositing allows us to use GPU blend modes (SrcAtop) instead of clipping loops!
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
         ) {
             if (mainText.isEmpty()) return@Canvas
             if (!isActiveLine) {
                 drawText(layoutResult, color = lineColor)
             } else {
-                if (isRtlText) {
+                if (isComplexText) {
                     val (wordIdxMap, _, _) = charToWordData
                     val wordFactors = effectiveWords.map { word ->
                         val wStartMs = (word.startTime * 1000).toLong()
@@ -470,36 +485,73 @@ private fun WordLevelLyrics(
                         Triple(sungFactor, isWordSung, isWordActive)
                     }
 
+                    // 1. Draw the static text ONCE into the transparent layer buffer
                     drawText(layoutResult, color = lineColor.copy(alpha = focusedAlpha))
 
+                    // 2. GPU Accelerated Masking via BlendMode.SrcAtop
                     effectiveWords.indices.forEach { wIdx ->
                         val (sungFactor, isWordSung, isWordActive) = wordFactors[wIdx]
+                        if (sungFactor <= 0f) return@forEach
                         
-                        var left = Float.MAX_VALUE
-                        var right = Float.MIN_VALUE
-                        var top = Float.MAX_VALUE
-                        var bottom = Float.MIN_VALUE
+                        val lineBoundsMap = mutableMapOf<Int, FloatArray>()
                         var found = false
 
                         for (i in mainText.indices) {
                             if (wordIdxMap[i] == wIdx) {
+                                val lineIdx = layoutResult.getLineForOffset(i)
                                 val bounds = layoutResult.getBoundingBox(i)
-                                left = minOf(left, bounds.left)
-                                right = maxOf(right, bounds.right)
-                                top = minOf(top, bounds.top)
-                                bottom = maxOf(bottom, bounds.bottom)
+                                val lb = lineBoundsMap.getOrPut(lineIdx) { floatArrayOf(Float.MAX_VALUE, Float.MIN_VALUE) }
+                                lb[0] = minOf(lb[0], bounds.left)
+                                lb[1] = maxOf(lb[1], bounds.right)
                                 found = true
                             }
                         }
 
                         if (found) {
-                            if (isWordSung) {
-                                clipRect(left = left, top = top, right = right, bottom = bottom) {
-                                    drawText(layoutResult, color = expressiveAccent)
-                                }
-                            } else if (isWordActive && sungFactor > 0f) {
-                                clipRect(left = left, top = top, right = right, bottom = bottom) {
-                                    drawText(layoutResult, color = expressiveAccent.copy(alpha = focusedAlpha + (1f - focusedAlpha) * sungFactor))
+                            val isRtl = mainText.indices.firstOrNull { wordIdxMap[it] == wIdx }?.let { charIndex ->
+                                val dir = Character.getDirectionality(mainText[charIndex]).toInt()
+                                dir == Character.DIRECTIONALITY_RIGHT_TO_LEFT.toInt() || 
+                                dir == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC.toInt()
+                            } ?: false
+                            
+                            lineBoundsMap.forEach { (lineIdx, boundsArray) ->
+                                val left = boundsArray[0]
+                                val right = boundsArray[1]
+                                val safeTop = layoutResult.getLineTop(lineIdx) - 30f 
+                                val safeBottom = layoutResult.getLineBottom(lineIdx) + 30f
+
+                                if (isWordSung) {
+                                    drawRect(color = expressiveAccent, topLeft = Offset(left, safeTop), size = Size(right - left, safeBottom - safeTop), blendMode = BlendMode.SrcAtop)
+                                } else {
+                                    val wordWidth = right - left
+                                    val sweepWidth = wordWidth * sungFactor
+                                    val edgeW = (wordWidth * 0.45f).coerceAtLeast(1f)
+                                    
+                                    if (isRtl) {
+                                        val fillX = right - sweepWidth
+                                        val solidLeft = (fillX + edgeW).coerceAtMost(right)
+                                        if (solidLeft < right) {
+                                            drawRect(color = expressiveAccent, topLeft = Offset(solidLeft, safeTop), size = Size(right - solidLeft, safeBottom - safeTop), blendMode = BlendMode.SrcAtop)
+                                        }
+                                        if (fillX < solidLeft) {
+                                            drawRect(
+                                                brush = Brush.horizontalGradient(listOf(expressiveAccent.copy(alpha = 0f), expressiveAccent), startX = fillX, endX = solidLeft),
+                                                topLeft = Offset(fillX, safeTop), size = Size(solidLeft - fillX, safeBottom - safeTop), blendMode = BlendMode.SrcAtop
+                                            )
+                                        }
+                                    } else {
+                                        val fillX = left + sweepWidth
+                                        val solidRight = (fillX - edgeW).coerceAtLeast(left)
+                                        if (solidRight > left) {
+                                            drawRect(color = expressiveAccent, topLeft = Offset(left, safeTop), size = Size(solidRight - left, safeBottom - safeTop), blendMode = BlendMode.SrcAtop)
+                                        }
+                                        if (fillX > solidRight) {
+                                            drawRect(
+                                                brush = Brush.horizontalGradient(listOf(expressiveAccent, expressiveAccent.copy(alpha = 0f)), startX = solidRight, endX = fillX),
+                                                topLeft = Offset(solidRight, safeTop), size = Size(fillX - solidRight, safeBottom - safeTop), blendMode = BlendMode.SrcAtop
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -566,14 +618,8 @@ private fun WordLevelLyrics(
                     lineTotalPushes[lineIdx] += layoutResult.getBoundingBox(i).width * (charScaleX - 1f)
                 }
 
-                // Pass 2 + 3 combined:
-                // - Pass 2 draws the dim base character with per-character animation transforms.
-                // - We simultaneously accumulate each word's *animated* bounding rect so that
-                //   Pass 3 (highlight sweep + glow) draws at the same positions as the animations,
-                //   not the original static getBoundingBox() positions.
-                //
-                // animatedWordBounds[wIdx] = Pair(left, right) in canvas space after transforms.
-                val animatedWordBounds = Array(effectiveWords.size) { floatArrayOf(Float.MAX_VALUE, Float.MIN_VALUE, Float.MAX_VALUE, Float.MIN_VALUE) } // [left, right, top, bottom]
+                // Pass 2: Draw the base bounding characters (O(N) layout draws instead of O(N^2) in sweep)
+                val animatedWordBounds = Array(effectiveWords.size) { mutableMapOf<Int, FloatArray>() }
 
                 for (i in mainText.indices) {
                     val lineIdx = layoutResult.getLineForOffset(i)
@@ -618,12 +664,10 @@ private fun WordLevelLyrics(
                     val charScaleX = 1f + wobbleX + crescendoDeltaX + nudgeScale * 0.3f
                     val charScaleY = 1f + wobbleY + crescendoDeltaY + nudgeScale
 
-                    // Compute this character's animated canvas-space position (mirrors the withTransform below)
                     val baseLeft = alignShift + lineCurrentPushes[lineIdx] + charBounds.left
                     val baseTop  = charBounds.top
                     val scaledW  = charBounds.width * charScaleX
                     val scaledH  = charBounds.height * charScaleY
-                    // pivot is (charBounds.width/2, charBounds.height) in local space
                     val pivotLocalX = charBounds.width / 2f
                     val pivotLocalY = charBounds.height
                     val animLeft   = baseLeft + pivotLocalX - pivotLocalX * charScaleX
@@ -632,7 +676,8 @@ private fun WordLevelLyrics(
                     val animBottom = animTop  + scaledH
 
                     if (wordIdx != -1) {
-                        val wb = animatedWordBounds[wordIdx]
+                        val wbMap = animatedWordBounds[wordIdx]
+                        val wb = wbMap.getOrPut(lineIdx) { floatArrayOf(Float.MAX_VALUE, Float.MIN_VALUE, Float.MAX_VALUE, Float.MIN_VALUE) }
                         wb[0] = minOf(wb[0], animLeft);  wb[1] = maxOf(wb[1], animRight)
                         wb[2] = minOf(wb[2], animTop);   wb[3] = maxOf(wb[3], animBottom)
                     }
@@ -653,7 +698,6 @@ private fun WordLevelLyrics(
                             scale(charScaleX, charScaleY, pivot = Offset(charBounds.width / 2f, charBounds.height))
                         }
                     }) {
-                        // Draw dim base character clipped to local space.
                         val baseAlpha = if (isWordSung || charLp > 0.99f) 1f else (focusedAlpha + (1f - focusedAlpha) * sungFactor)
                         val charColor = expressiveAccent.copy(alpha = if (wordIdx == -1) focusedAlpha else baseAlpha)
                         clipRect(left = 0f, top = 0f, right = charBounds.width, bottom = charBounds.height) {
@@ -665,63 +709,58 @@ private fun WordLevelLyrics(
                     lineCurrentPushes[lineIdx] += charBounds.width * (charScaleX - 1f)
                 }
 
-                // Pass 3: word-level highlight sweep and glow using animated word bounds.
-                // The sweep and glow now track the same animated positions as the characters in Pass 2.
+                // Pass 3: GPU Gradient Sweep! Completely decoupled from layoutResult.draw calls!
                 effectiveWords.forEachIndexed { wIdx, word ->
                     val (sungFactor, _, isWordSung) = wordFactors[wIdx]
                     if (!isWordSung && sungFactor <= 0f) return@forEachIndexed
 
-                    val wb = animatedWordBounds[wIdx]
-                    val wLeft = wb[0]; val wRight = wb[1]
-                    val wTop  = wb[2]; val wBottom = wb[3]
-                    if (wLeft == Float.MAX_VALUE) return@forEachIndexed
+                    val wbMap = animatedWordBounds[wIdx]
+                    if (wbMap.isEmpty()) return@forEachIndexed
 
-                    // --- Glow (real BlurMaskFilter, via Compose DrawScope only — no raw native clipRect) ---
-                    val dur = (word.endTime * 1000 - word.startTime * 1000)
-                    val wordLenText = word.text.length.coerceAtLeast(1)
-                    val impactRatio = dur.toFloat() / wordLenText
-                    val fadeFactor = (sungFactor * 5f).coerceIn(0f, 1f) * ((1f - sungFactor) * 8f).coerceIn(0f, 1f)
-                    val impactFactor = (((impactRatio - 100f) / 250f).coerceIn(0f, 1f) * 0.6f +
-                            ((dur.toFloat() - 300f) / 1500f).coerceIn(0f, 1f) * 0.4f).coerceIn(0f, 1f) * fadeFactor
-                    if (impactFactor > 0.01f && !isWordSung) {
-                        val glowAlpha = (0.35f * impactFactor).coerceIn(0f, 0.4f)
-                        val glowRadius = 12.dp.toPx() * impactFactor
-                        // Apply blur via saveLayer with BlurMaskFilter on the native paint,
-                        // clipped to the animated word bounds entirely within DrawScope's coordinate space.
-                        clipRect(left = wLeft, top = wTop, right = wRight, bottom = wBottom) {
-                            drawIntoCanvas { canvas ->
-                                glowPaint.maskFilter = BlurMaskFilter(glowRadius, BlurMaskFilter.Blur.NORMAL)
-                                glowPaint.color = expressiveAccent.copy(alpha = glowAlpha).toArgb()
-                                glowPaint.textSize = lyricStyle.fontSize.toPx()
-                                glowPaint.typeface = android.graphics.Typeface.DEFAULT_BOLD
-                                // Draw at the animated word's top-left so the glow sits on the word
-                                canvas.nativeCanvas.drawText(mainText, wLeft, wTop + layoutResult.firstBaseline, glowPaint)
-                            }
-                        }
-                    }
+                    wbMap.forEach { (_, wb) ->
+                        val wLeft = wb[0]; val wRight = wb[1]
+                        val wTop  = wb[2]; val wBottom = wb[3]
+                        if (wLeft == Float.MAX_VALUE) return@forEach
 
-                    // --- Highlight sweep (word-level, across animated word bounds) ---
-                    if (isWordSung) {
-                        clipRect(left = wLeft, top = wTop, right = wRight, bottom = wBottom) {
-                            drawText(layoutResult, color = expressiveAccent)
-                        }
-                    } else if (sungFactor > 0f) {
-                        val wordWidth = wRight - wLeft
-                        val fillX = wLeft + wordWidth * sungFactor
-                        val edgeW = (wordWidth * 0.45f).coerceAtLeast(1f)
-                        val solidRight = (fillX - edgeW).coerceAtLeast(wLeft)
-                        if (solidRight > wLeft) {
-                            clipRect(left = wLeft, top = wTop, right = solidRight, bottom = wBottom) {
-                                drawText(layoutResult, color = expressiveAccent)
-                            }
-                        }
-                        for (j in 0 until 12) {
-                            val sliceStart = solidRight + (j * edgeW / 12f)
-                            val sliceEnd = (solidRight + ((j + 1) * edgeW / 12f) + 0.5f).coerceAtMost(fillX)
-                            if (sliceEnd > sliceStart && sliceStart < wRight) {
-                                clipRect(left = sliceStart, top = wTop, right = minOf(sliceEnd, wRight), bottom = wBottom) {
-                                    drawText(layoutResult, color = expressiveAccent.copy(alpha = 1f - (j + 0.5f) / 12f))
+                        val dur = (word.endTime * 1000 - word.startTime * 1000)
+                        val wordLenText = word.text.length.coerceAtLeast(1)
+                        val impactRatio = dur.toFloat() / wordLenText
+                        val fadeFactor = (sungFactor * 5f).coerceIn(0f, 1f) * ((1f - sungFactor) * 8f).coerceIn(0f, 1f)
+                        val impactFactor = (((impactRatio - 100f) / 250f).coerceIn(0f, 1f) * 0.6f +
+                                ((dur.toFloat() - 300f) / 1500f).coerceIn(0f, 1f) * 0.4f).coerceIn(0f, 1f) * fadeFactor
+                        
+                        if (impactFactor > 0.01f && !isWordSung) {
+                            val glowAlpha = (0.35f * impactFactor).coerceIn(0f, 0.4f)
+                            val glowRadius = 12.dp.toPx() * impactFactor
+                            // Keeping the glow natively drawn (it flashes rarely so it's not the bottleneck)
+                            clipRect(left = wLeft, top = wTop, right = wRight, bottom = wBottom) {
+                                drawIntoCanvas { canvas ->
+                                    glowPaint.maskFilter = BlurMaskFilter(glowRadius, BlurMaskFilter.Blur.NORMAL)
+                                    glowPaint.color = expressiveAccent.copy(alpha = glowAlpha).toArgb()
+                                    glowPaint.textSize = lyricStyle.fontSize.toPx()
+                                    glowPaint.typeface = android.graphics.Typeface.DEFAULT_BOLD
+                                    canvas.nativeCanvas.drawText(mainText, wLeft, wTop + layoutResult.firstBaseline, glowPaint)
                                 }
+                            }
+                        }
+
+                        // 🚀 NO MORE CPU CLIP LOOPS. Just pure graphics layer gradient rendering via SrcAtop!
+                        if (isWordSung) {
+                            drawRect(color = expressiveAccent, topLeft = Offset(wLeft, wTop), size = Size(wRight - wLeft, wBottom - wTop), blendMode = BlendMode.SrcAtop)
+                        } else if (sungFactor > 0f) {
+                            val wordWidth = wRight - wLeft
+                            val fillX = wLeft + wordWidth * sungFactor
+                            val edgeW = (wordWidth * 0.45f).coerceAtLeast(1f)
+                            val solidRight = (fillX - edgeW).coerceAtLeast(wLeft)
+                            
+                            if (solidRight > wLeft) {
+                                drawRect(color = expressiveAccent, topLeft = Offset(wLeft, wTop), size = Size(solidRight - wLeft, wBottom - wTop), blendMode = BlendMode.SrcAtop)
+                            }
+                            if (fillX > solidRight) {
+                                drawRect(
+                                    brush = Brush.horizontalGradient(listOf(expressiveAccent, expressiveAccent.copy(alpha = 0f)), startX = solidRight, endX = fillX),
+                                    topLeft = Offset(solidRight, wTop), size = Size(fillX - solidRight, wBottom - wTop), blendMode = BlendMode.SrcAtop
+                                )
                             }
                         }
                     }
