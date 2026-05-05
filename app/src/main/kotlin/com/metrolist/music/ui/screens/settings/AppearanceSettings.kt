@@ -47,6 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -65,6 +66,8 @@ import com.metrolist.music.constants.DynamicThemeKey
 import com.metrolist.music.constants.EnableDynamicIconKey
 import com.metrolist.music.constants.EnableHighRefreshRateKey
 import com.metrolist.music.constants.ExperimentalLyricsKey
+import com.metrolist.music.constants.GradientBackgroundEnabledKey
+import com.metrolist.music.constants.GradientBackgroundOpacityKey
 import com.metrolist.music.constants.GridItemSize
 import com.metrolist.music.constants.GridItemsSizeKey
 import com.metrolist.music.constants.HidePlayerThumbnailKey
@@ -148,6 +151,13 @@ fun AppearanceSettings(
             SelectedThemeColorKey,
             defaultValue = DefaultThemeColor.toArgb(),
         )
+
+    val (gradientBackgroundEnabled, onGradientBackgroundEnabledChange) =
+        rememberPreference(GradientBackgroundEnabledKey, defaultValue = false)
+
+    val (gradientBackgroundOpacity, onGradientBackgroundOpacityChange) =
+        rememberPreference(GradientBackgroundOpacityKey, defaultValue = 0.15f)
+
     // Check if user has selected a custom color (not the default/dynamic color)
     val isUsingCustomColor = selectedThemeColorInt != DefaultThemeColor.toArgb()
     val coroutineScope = rememberCoroutineScope()
@@ -1062,6 +1072,54 @@ fun AppearanceSettings(
 
         Spacer(modifier = Modifier.height(27.dp))
 
+        // --- NEW DISPLAY/GRADIENT GROUP ---
+        Material3SettingsGroup(title = stringResource(R.string.appearance_group_display)) {
+            Material3SettingsItem(
+                icon = painterResource(R.drawable.palette),
+                title = { Text(stringResource(id = R.string.appearance_gradient_background)) },
+                description = { Text(stringResource(id = R.string.appearance_gradient_background_desc)) },
+                trailingContent = {
+                    Switch(
+                        checked = gradientBackgroundEnabled,
+                        onCheckedChange = onGradientBackgroundEnabledChange,
+                        modifier = Modifier.scale(0.8f),
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = MaterialTheme.colorScheme.primary,
+                            uncheckedThumbColor = MaterialTheme.colorScheme.outline,
+                        ),
+                    )
+                },
+                onClick = { onGradientBackgroundEnabledChange(!gradientBackgroundEnabled) }
+            )
+
+            if (gradientBackgroundEnabled) {
+                Material3SettingsItem(
+                    title = { Text(stringResource(id = R.string.appearance_gradient_opacity)) },
+                    description = { Text(stringResource(id = R.string.appearance_gradient_opacity_desc)) },
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                    ) {
+                        Slider(
+                            value = gradientBackgroundOpacity,
+                            onValueChange = onGradientBackgroundOpacityChange,
+                            valueRange = 0.05f..0.3f,
+                            steps = 4,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            text = stringResource(id = R.string.appearance_gradient_opacity_value, (gradientBackgroundOpacity * 100).toInt()),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.align(Alignment.CenterHorizontally)
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(27.dp))
+
         val (pureBlackMiniPlayer, onPureBlackMiniPlayerChange) =
             rememberPreference(
                 PureBlackMiniPlayerKey,
@@ -1804,10 +1862,10 @@ fun AppearanceSettings(
                                             ),
                                         contentDescription = null,
                                         modifier = Modifier.size(SwitchDefaults.IconSize),
-                                    )
-                                },
-                            )
-                        },
+                                        )
+                                    },
+                                )
+                            },
                         onClick = { onShowTopPlaylistChange(!showTopPlaylist) },
                     ),
                     Material3SettingsItem(
